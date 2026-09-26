@@ -22,9 +22,11 @@ class BacktestEngine:
         self.position_sizing_engine = position_sizing_engine
         self.transaction_cost_model = transaction_cost_model or (lambda trade, exit_price: 0.0)
         self.completed_trades = []
+        self._daily_loss_ctx = None
 
     def run(self, df: pd.DataFrame) -> BacktestResult:
         self.completed_trades = []
+        self._daily_loss_ctx = None
         self.trade_engine.reset()
         if self.position_sizing_engine is not None:
             self.position_sizing_engine.reset()
@@ -33,6 +35,9 @@ class BacktestEngine:
 
         data = self.strategy.prepare_data(self.exit_engine.prepare_data(df))
         intraday = bool(getattr(self.strategy, "intraday", False))
+        allow_same_candle_reentry = bool(
+            getattr(self.strategy, "allow_same_candle_reentry", False)
+        )
         clock_column = "timestamp" if intraday and "timestamp" in data else "date"
         data[clock_column] = pd.to_datetime(data[clock_column])
         data = data.sort_values([clock_column, "symbol"], kind="stable").reset_index(drop=True)
@@ -41,8 +46,26 @@ class BacktestEngine:
         final_intraday_timestamps = {}
         stop_losses_by_day = {}
         stop_losses_by_symbol_day = {}
+        losses_by_day = {}
+        losses_by_symbol_day = {}
         daily_stop_limit = getattr(self.strategy, "max_stop_losses_per_day", None)
         symbol_stop_limit = getattr(self.strategy, "max_stop_losses_per_symbol_per_day", None)
+        daily_loss_limit = getattr(self.strategy, "max_loss_trades_per_day", None)
+        symbol_loss_limit = getattr(
+            self.strategy, "max_loss_trades_per_symbol_per_day", None
+        )
+        max_daily_loss_pct = getattr(self.strategy, "max_daily_loss_pct", None)
+        if max_daily_loss_pct is not None and self.position_sizing_engine is not None:
+            self._daily_loss_ctx = {
+                "max_daily_loss_pct": float(max_daily_loss_pct),
+                "clock_column": clock_column,
+                "last_trading_day": None,
+                "trading_day": None,
+                "daily_realized_pnl": 0.0,
+                "daily_loss_limit": 0.0,
+                "locked": False,
+                "pending": set(),
+            }
         if intraday:
             trading_days = data[clock_column].dt.normalize()
             final_intraday_timestamps = (
@@ -58,24 +81,42 @@ class BacktestEngine:
         for timestamp, candle_rows in groupby(rows, key=itemgetter(clock_column)):
             trading_day = pd.Timestamp(timestamp).normalize()
             candles = list(candle_rows)
+            self._reset_daily_loss_state(trading_day)
 
             active_at_start = set(self.trade_engine.get_active_trades())
+            self._process_daily_loss_closes(candles)
             for row in candles:
                 symbol = str(row["symbol"])
                 if symbol in active_at_start:
+                    if self._daily_loss_trading_locked() and self.trade_engine.has_active_trade(symbol):
+                        continue
                     closed_trade = self._check_exit(symbol, row)
                     if closed_trade is not None and closed_trade.exit_reason == "SL":
                         stop_losses_by_day[trading_day] = stop_losses_by_day.get(trading_day, 0) + 1
                         key = (trading_day, symbol)
                         stop_losses_by_symbol_day[key] = stop_losses_by_symbol_day.get(key, 0) + 1
+                    if closed_trade is not None and closed_trade.pnl < 0:
+                        losses_by_day[trading_day] = losses_by_day.get(trading_day, 0) + 1
+                        key = (trading_day, symbol)
+                        losses_by_symbol_day[key] = losses_by_symbol_day.get(key, 0) + 1
+                    if closed_trade is not None:
+                        self._process_daily_loss_closes(candles)
 
             for row in candles:
                 symbol = str(row["symbol"])
-                if symbol in active_at_start or self.trade_engine.has_active_trade(symbol):
+                if ((symbol in active_at_start and not allow_same_candle_reentry)
+                        or self.trade_engine.has_active_trade(symbol)):
+                    continue
+                if self._daily_loss_trading_locked():
                     continue
                 if daily_stop_limit is not None and stop_losses_by_day.get(trading_day, 0) >= daily_stop_limit:
                     continue
                 if symbol_stop_limit is not None and stop_losses_by_symbol_day.get((trading_day, symbol), 0) >= symbol_stop_limit:
+                    continue
+                if daily_loss_limit is not None and losses_by_day.get(trading_day, 0) >= daily_loss_limit:
+                    continue
+                if (symbol_loss_limit is not None
+                        and losses_by_symbol_day.get((trading_day, symbol), 0) >= symbol_loss_limit):
                     continue
                 signal = self.strategy.generate_signal(row)
                 if signal is None:
@@ -141,10 +182,58 @@ class BacktestEngine:
             trade.equity_after = self.position_sizing_engine.current_equity
         elif trade.equity_before is not None:
             trade.equity_after = trade.equity_before + trade.pnl
+        self._register_daily_realized_pnl(trade)
         if "entry_timestamp" in trade.metadata:
             trade.metadata["exit_timestamp"] = pd.Timestamp(exit_date)
         self.completed_trades.append(trade.to_dict())
         return trade
+
+    def _daily_loss_trading_locked(self) -> bool:
+        ctx = self._daily_loss_ctx
+        return bool(ctx and ctx["locked"])
+
+    def _reset_daily_loss_state(self, trading_day: pd.Timestamp) -> None:
+        ctx = self._daily_loss_ctx
+        if ctx is None:
+            return
+        if ctx["last_trading_day"] is None or trading_day != ctx["last_trading_day"]:
+            ctx["last_trading_day"] = trading_day
+            ctx["trading_day"] = trading_day
+            ctx["locked"] = False
+            ctx["pending"].clear()
+            ctx["daily_realized_pnl"] = 0.0
+            equity = self.position_sizing_engine.current_equity
+            ctx["daily_loss_limit"] = equity * (ctx["max_daily_loss_pct"] / 100.0)
+
+    def _register_daily_realized_pnl(self, trade) -> None:
+        ctx = self._daily_loss_ctx
+        if ctx is None or trade.pnl is None:
+            return
+        trade_day = pd.Timestamp(trade.exit_date).normalize()
+        if trade_day != ctx["trading_day"]:
+            return
+        ctx["daily_realized_pnl"] += float(trade.pnl)
+        if ctx["locked"]:
+            return
+        if ctx["daily_realized_pnl"] <= -ctx["daily_loss_limit"]:
+            ctx["locked"] = True
+            ctx["pending"].update(self.trade_engine.get_active_trades())
+
+    def _process_daily_loss_closes(self, candles) -> None:
+        ctx = self._daily_loss_ctx
+        if ctx is None or not ctx["pending"]:
+            return
+        candles_by_symbol = {str(row["symbol"]): row for row in candles}
+        for symbol in list(ctx["pending"]):
+            if not self.trade_engine.has_active_trade(symbol):
+                ctx["pending"].discard(symbol)
+                continue
+            row = candles_by_symbol.get(symbol)
+            if row is None:
+                continue
+            exit_date = row.get("timestamp", row["date"])
+            self._close_trade(symbol, exit_date, float(row["close"]), "DAILY_LOSS_LIMIT")
+            ctx["pending"].discard(symbol)
 
     def _build_trades_dataframe(self):
         if not self.completed_trades:
