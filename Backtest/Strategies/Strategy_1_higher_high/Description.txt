@@ -1,0 +1,15 @@
+1. This is a swing trading strategy
+2. This strategy takes position when 
+    current day close > previous day close
+    current day high > previous day high
+    current day low > previous day low
+    current day close > 70 percent of range
+3. The system will be triggered at 3:10 and complete the scan by 3:12 and enter the trade 
+4. so the triggered candle close will be the approx entry price
+5. Stop loss is either entry day candle low or 9 ema 
+6. TG ride until a certain a percent return or break of 9 ema
+
+
+further expected inprovements
+
+1. volume parameter

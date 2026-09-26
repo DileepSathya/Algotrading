@@ -1,0 +1,7 @@
+artifacts/
+__pycache__
+logs/
+fyersApi.log
+fyersRequests.log
+Config/
+venv/

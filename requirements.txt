@@ -1,0 +1,7 @@
+fyers_apiv3
+PyYAML
+pandas
+numpy
+matplotlib
+pandas
+logging

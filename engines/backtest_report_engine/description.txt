@@ -1,0 +1,52 @@
+How to use the backtest_report_engine
+
+from the strategy run the follwing script
+                |
+                |
+                |
+                \/
+from engines.backtest_report_engine import BacktestReportEngine
+
+report_engine = BacktestReportEngine(
+    trades_df=trades_df,
+    capital=1_000_000,
+    strategy_name="HigherHighStrategy",
+    reports_root="D:/FM/ALGOTRADING/artifacts/backtest_reports",
+    monte_carlo_simulations=5000,
+    monte_carlo_seed=42,
+)
+
+report, report_folder = report_engine.generate_and_save()
+
+print(report)
+print(report_folder)
+
+The report text and JSON include a Monte Carlo summary when there are at
+least two completed trades. The run folder also contains
+monte_carlo_equity.png. With fewer trades, the summary says the analysis
+is unavailable and no Monte Carlo chart is created.
+
+Each simulation samples the historical completed-trade P&L with
+replacement, using the same number of trades and the same initial capital.
+The summary gives the median and 5th/95th percentile ending capital,
+median and 95th percentile maximum drawdown, and the percentage of
+simulations ending below initial capital. The seed makes reruns reproducible.
+These are conditional scenarios, not forecasts. Independent trade sampling
+does not preserve market regimes, trade dependence, or open-position equity.
+
+required columns in trades_df
+                |
+                |
+                |
+                |
+                \/
+                
+required_columns = [
+    "entry_date",
+    "exit_date",
+    "entry",
+    "exit_price",
+    "pnl",
+    "pnl_percent",
+    "exit_reason",
+]

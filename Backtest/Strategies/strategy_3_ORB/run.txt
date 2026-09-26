@@ -1,0 +1,1 @@
+(venv) PS D:\FM\ALGOTRADING> C:\Users\hp\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m Backtest.Strategies.strategy_3_ORB.run_backtest

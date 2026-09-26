@@ -1,0 +1,3 @@
+main goal is to increase win rate
+
+add indicatiors such as RSI, EMA etc to increase winrate
