@@ -23,7 +23,7 @@ class ORBStrategyTests(unittest.TestCase):
             bar("2024-01-01", "10:00", "B", 211, 200, 211),
             bar("2024-01-02", "10:00", "A", 121, 115, 121),
         ])
-        prepared = ORBStrategy().prepare_data(raw)
+        prepared = ORBStrategy(atr_period=None, volume_period=None).prepare_data(raw)
         values = prepared.set_index(["trading_date", "symbol", "time"])
         a1 = values.loc[(pd.Timestamp("2024-01-01"), "A", pd.Timestamp("10:00").time())]
         b1 = values.loc[(pd.Timestamp("2024-01-01"), "B", pd.Timestamp("10:00").time())]
@@ -39,6 +39,8 @@ class ORBStrategyTests(unittest.TestCase):
             bar("2024-01-01", "10:00", "A", 112, 105, 111, 2),
         ])
         strategy = ORBStrategy(orb_end=time(10, 0), sl_range_multiplier=0.5,
+                               atr_period=None,
+                               volume_period=None,
                                target_range_multiplier=1.0)
         prepared = strategy.prepare_data(raw)
         self.assertIsNone(strategy.generate_signal(prepared.iloc[1]))
@@ -51,7 +53,7 @@ class ORBStrategyTests(unittest.TestCase):
             bar("2024-01-01", "09:15", "A", 105, 95, 100),
             bar("2024-01-01", "10:00", "A", 96, 93, 94, 2),
         ])
-        strategy = ORBStrategy()
+        strategy = ORBStrategy(atr_period=None, volume_period=None)
         signal = strategy.generate_signal(strategy.prepare_data(raw).iloc[-1])
         self.assertEqual(signal.direction, "SHORT")
         self.assertEqual((signal.entry_price, signal.sl, signal.target), (94, 104, 76.5))
@@ -62,7 +64,7 @@ class ORBStrategyTests(unittest.TestCase):
             bar("2024-01-01", "09:15", "A", 100, 100, 100),
             bar("2024-01-01", "10:00", "A", 101, 100, 101, 2),
         ])
-        strategy = ORBStrategy()
+        strategy = ORBStrategy(atr_period=None, volume_period=None)
         self.assertIsNone(strategy.generate_signal(strategy.prepare_data(raw).iloc[-1]))
 
     def test_breakouts_at_or_after_forced_exit_time_are_ineligible(self):
@@ -71,7 +73,7 @@ class ORBStrategyTests(unittest.TestCase):
             bar("2024-01-01", "14:30", "A", 110, 105, 109, 2),
             bar("2024-01-01", "15:00", "A", 112, 108, 111, 3),
         ])
-        strategy = ORBStrategy()
+        strategy = ORBStrategy(atr_period=None, volume_period=None)
         prepared = strategy.prepare_data(raw)
         self.assertIsNone(strategy.generate_signal(prepared.iloc[1]))
         self.assertIsNone(strategy.generate_signal(prepared.iloc[2]))
@@ -83,7 +85,7 @@ class ORBStrategyTests(unittest.TestCase):
             bar("2024-01-01", "11:29", "A", 110, 105, 108, 3),
             bar("2024-01-01", "11:30", "A", 111, 105, 109, 4),
         ])
-        prepared = ORBStrategy().prepare_data(raw)
+        prepared = ORBStrategy(atr_period=None, volume_period=None).prepare_data(raw)
         self.assertTrue(prepared.iloc[2]["entry_eligible"])
         self.assertFalse(prepared.iloc[3]["entry_eligible"])
 

@@ -10,7 +10,7 @@ from engines.backtest_report_engine import BacktestReportEngine
 from engines.exit_engine import ExitEngine, SLExit, TargetExit, TimeExit
 from engines.position_sizing_engine import PositionSizingEngine
 from engines.trade_engine import TradeEngine
-
+from datetime import datetime
 if __package__ in {None, ""}:
     from Backtest.Strategies.strategy_3_ORB.reporting import save_orb_artifacts
     from Backtest.Strategies.strategy_3_ORB.strategy import ORBStrategy
@@ -23,7 +23,7 @@ else:
 
 DEFAULT_DATA = PROJECT_ROOT / "artifacts/backtest/hist_data_5.json"
 DEFAULT_REPORTS = PROJECT_ROOT / "artifacts/backtest_reports"
-
+print(datetime.now())
 
 def run(data_path=DEFAULT_DATA, reports_root=DEFAULT_REPORTS, initial_capital=100_000.0,
         max_open_positions=4, transaction_cost_model=None, combination=None):
@@ -78,3 +78,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print(datetime.now())

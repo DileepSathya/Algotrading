@@ -26,6 +26,13 @@ class SignalColumnStrategy:
         )
 
 
+class MappingRowStrategy(SignalColumnStrategy):
+    def generate_signal(self, row):
+        if not isinstance(row, dict):
+            raise TypeError("backtest rows must use lightweight mappings")
+        return super().generate_signal(row)
+
+
 def candle(day, symbol, close, high, low, entry_signal=False):
     return {
         "date": pd.Timestamp(day),
@@ -49,6 +56,22 @@ def backtest(capital=1000, slots=1):
 
 
 class PositionSizingBacktestTests(unittest.TestCase):
+    def test_engine_supplies_lightweight_mapping_rows_to_strategy(self):
+        engine = BacktestEngine(
+            strategy=MappingRowStrategy(),
+            trade_engine=TradeEngine(),
+            exit_engine=ExitEngine([TargetExit(), SLExit()]),
+        )
+        data = pd.DataFrame([
+            candle("2024-01-01", "A", 100, 100, 100, True),
+            candle("2024-01-02", "A", 110, 111, 100),
+        ])
+
+        trades = engine.run(data).to_dataframe()
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades.iloc[0]["exit_reason"], "TARGET")
+
     def test_exit_frees_slot_before_same_day_close_entry(self):
         engine, _ = backtest()
         data = pd.DataFrame([

@@ -1,12 +1,62 @@
 import json
+import tempfile
 import unittest
 
 import pandas as pd
 
-from Backtest.Strategies.strategy_3_ORB.validate_results import audit_trade, validate_trade_invariants
+from Backtest.Strategies.strategy_3_ORB.validate_results import (
+    audit_trade,
+    validate_and_save,
+    validate_trade_invariants,
+)
+
+
+def validation_fixture(trade_count=3):
+    raw = pd.DataFrame([
+        {"date": "2024-01-01", "time": "09:15", "symbol": "A", "high": 105, "low": 95, "close": 100},
+        {"date": "2024-01-01", "time": "10:00", "symbol": "A", "high": 108, "low": 105, "close": 106},
+        {"date": "2024-01-01", "time": "10:05", "symbol": "A", "high": 117, "low": 110, "close": 116},
+    ])
+    trade = {"entry_timestamp": "2024-01-01 10:00", "exit_timestamp": "2024-01-01 10:05",
+             "symbol": "A", "entry": 106, "exit_price": 116, "exit_reason": "TARGET",
+             "quantity": 5, "equity_before": 100_000, "sl": 101, "target": 116,
+             "direction": "LONG", "gross_pnl": 50, "transaction_cost": 0, "pnl": 50,
+             "orb_high": 105, "orb_low": 95, "orb_range": 10}
+    return raw, pd.DataFrame([trade] * trade_count)
 
 
 class ORBResultValidationTests(unittest.TestCase):
+    def test_default_validation_source_audits_only_direction_samples(self):
+        raw, trades = validation_fixture()
+        with tempfile.TemporaryDirectory() as folder:
+            result = validate_and_save(
+                raw,
+                trades,
+                folder,
+                sample_each_direction=1,
+                sl_range_multiplier=0.5,
+                target_range_multiplier=1.0,
+            )
+
+        self.assertEqual(result["trades_checked"], 3)
+        self.assertEqual(result["source_candle_audits"], 1)
+
+    def test_strict_validation_source_audits_every_trade(self):
+        raw, trades = validation_fixture()
+        with tempfile.TemporaryDirectory() as folder:
+            result = validate_and_save(
+                raw,
+                trades,
+                folder,
+                sample_each_direction=1,
+                full_source_audit=True,
+                sl_range_multiplier=0.5,
+                target_range_multiplier=1.0,
+            )
+
+        self.assertEqual(result["trades_checked"], 3)
+        self.assertEqual(result["source_candle_audits"], 3)
+
     def test_manual_audit_values_are_json_serializable(self):
         raw = pd.DataFrame([
             {"date": "2024-01-01", "time": "09:15", "symbol": "A", "high": 105, "low": 95, "close": 100},

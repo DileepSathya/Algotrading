@@ -1,3 +1,5 @@
+from itertools import groupby
+from operator import itemgetter
 from typing import Any
 
 import pandas as pd
@@ -48,12 +50,17 @@ class BacktestEngine:
                 .groupby(["_trading_day", "symbol"])[clock_column]
                 .max().to_dict()
             )
-        for timestamp, candles in data.groupby(clock_column, sort=True):
+        columns = data.columns.tolist()
+        rows = (
+            dict(zip(columns, values))
+            for values in data.itertuples(index=False, name=None)
+        )
+        for timestamp, candle_rows in groupby(rows, key=itemgetter(clock_column)):
             trading_day = pd.Timestamp(timestamp).normalize()
-            candles = candles.sort_values("symbol", kind="stable")
+            candles = list(candle_rows)
 
             active_at_start = set(self.trade_engine.get_active_trades())
-            for _, row in candles.iterrows():
+            for row in candles:
                 symbol = str(row["symbol"])
                 if symbol in active_at_start:
                     closed_trade = self._check_exit(symbol, row)
@@ -62,7 +69,7 @@ class BacktestEngine:
                         key = (trading_day, symbol)
                         stop_losses_by_symbol_day[key] = stop_losses_by_symbol_day.get(key, 0) + 1
 
-            for _, row in candles.iterrows():
+            for row in candles:
                 symbol = str(row["symbol"])
                 if symbol in active_at_start or self.trade_engine.has_active_trade(symbol):
                     continue
@@ -97,13 +104,13 @@ class BacktestEngine:
                     direction=direction, metadata=metadata, equity_before=equity_before)
 
             if not intraday:
-                for symbol, row in candles.set_index("symbol").iterrows():
-                    symbol = str(symbol)
+                for row in candles:
+                    symbol = str(row["symbol"])
                     if (self.trade_engine.has_active_trade(symbol)
                             and pd.Timestamp(last_rows.loc[symbol, clock_column]) == pd.Timestamp(timestamp)):
                         self._close_trade(symbol, timestamp, float(row["close"]), "END_OF_BACKTEST")
             else:
-                for _, row in candles.iterrows():
+                for row in candles:
                     symbol = str(row["symbol"])
                     if (self.trade_engine.has_active_trade(symbol)
                             and pd.Timestamp(final_intraday_timestamps[(trading_day, symbol)]) == pd.Timestamp(timestamp)):

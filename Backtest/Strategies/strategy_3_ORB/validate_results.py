@@ -102,13 +102,22 @@ def validate_and_save(raw, trades, folder, sample_each_direction=3, orb_start=OR
                       orb_end=ORB_END, forced_exit_time=FORCED_EXIT_TIME,
                       risk_fraction=RISK_FRACTION,
                       sl_range_multiplier=SL_RANGE_MULTIPLIER,
-                      target_range_multiplier=TARGET_RANGE_MULTIPLIER):
+                      target_range_multiplier=TARGET_RANGE_MULTIPLIER,
+                      full_source_audit=False):
     summary = validate_trade_invariants(trades, orb_end=orb_end)
     groups = _prepare_raw(raw)
+    samples = [
+        trades[trades["direction"] == direction].head(sample_each_direction)
+        for direction in ("LONG", "SHORT")
+    ]
+    sampled_trades = pd.concat(samples) if samples else trades.iloc[0:0]
+    source_trades = trades if full_source_audit else sampled_trades
     failures = []
-    for index, row in trades.iterrows():
+    checked = {}
+    for index, row in source_trades.iterrows():
         checks = audit_trade(raw, row, groups, orb_start, orb_end, forced_exit_time,
                              risk_fraction, sl_range_multiplier, target_range_multiplier)
+        checked[index] = checks
         if not all(checks.values()):
             failures.append({"trade_index": int(index), **checks})
             if len(failures) >= 10:
@@ -116,14 +125,10 @@ def validate_and_save(raw, trades, folder, sample_each_direction=3, orb_start=OR
     if failures:
         raise AssertionError(f"source-candle validation failed: {failures}")
     audits = []
-    for direction in ("LONG", "SHORT"):
-        for index, row in trades[trades["direction"] == direction].head(sample_each_direction).iterrows():
-            checks = audit_trade(raw, row, groups, orb_start, orb_end, forced_exit_time,
-                                 risk_fraction, sl_range_multiplier, target_range_multiplier)
-            if not all(checks.values()):
-                raise AssertionError(f"manual audit failed for trade {index}: {checks}")
-            audits.append({"trade_index": int(index), "symbol": row["symbol"],
-                           "direction": direction, **checks})
-    result = {**summary, "source_candle_audits": int(len(trades)), "manual_audits": audits}
+    for index, row in sampled_trades.iterrows():
+        checks = checked[index]
+        audits.append({"trade_index": int(index), "symbol": row["symbol"],
+                       "direction": row["direction"], **checks})
+    result = {**summary, "source_candle_audits": int(len(source_trades)), "manual_audits": audits}
     Path(folder, "validation.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result

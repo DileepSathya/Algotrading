@@ -16,7 +16,7 @@ def bar(clock, high, low, close, volume=1):
 
 
 def engine():
-    return BacktestEngine(ORBStrategy(), TradeEngine(),
+    return BacktestEngine(ORBStrategy(atr_period=None, volume_period=None), TradeEngine(),
                           ExitEngine([SLExit(), TargetExit(), TimeExit("14:30")]),
                           PositionSizingEngine(100_000, 4))
 
@@ -30,7 +30,8 @@ class ORBBacktestTests(unittest.TestCase):
             {**bar("14:00", 108, 105, 107, 3), "symbol": "A"},
             {**bar("14:25", 210, 205, 206, 2), "symbol": "B"},
         ]
-        one_slot = BacktestEngine(ORBStrategy(entry_end_time=time(14, 30)), TradeEngine(),
+        one_slot = BacktestEngine(ORBStrategy(entry_end_time=time(14, 30), atr_period=None,
+                                              volume_period=None), TradeEngine(),
                                   ExitEngine([SLExit(), TargetExit(), TimeExit("14:30")]),
                                   PositionSizingEngine(100_000, 1))
         trades = one_slot.run(pd.DataFrame(rows)).to_dataframe()
@@ -38,7 +39,7 @@ class ORBBacktestTests(unittest.TestCase):
         self.assertEqual(trades.iloc[0].exit_timestamp, pd.Timestamp("2024-01-01 14:00"))
 
     def test_configurable_transaction_cost_reduces_trade_and_equity(self):
-        cost_engine = BacktestEngine(ORBStrategy(), TradeEngine(),
+        cost_engine = BacktestEngine(ORBStrategy(atr_period=None, volume_period=None), TradeEngine(),
                                      ExitEngine([SLExit(), TargetExit(), TimeExit("14:30")]),
                                      PositionSizingEngine(100_000, 4),
                                      transaction_cost_model=lambda trade, exit_price: 7.5)

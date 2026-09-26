@@ -2,11 +2,13 @@ from datetime import time
 
 import pandas as pd
 
+from .atr import aggregate_daily_ohlc, calculate_historical_atr
 from .config import (FORCED_EXIT_TIME, ORB_START, ORB_END, RISK_FRACTION,
                      SL_RANGE_MULTIPLIER, TARGET_RANGE_MULTIPLIER,
                      ENTRY_START_TIME, ENTRY_END_TIME, MAX_STOP_LOSSES_PER_DAY,
-                     MAX_STOP_LOSSES_PER_SYMBOL_PER_DAY)
+                     MAX_STOP_LOSSES_PER_SYMBOL_PER_DAY, ATR_VALUE, VOLUME_VALUE)
 from .models import ORBSignal
+from .volume import calculate_historical_volume_filter
 
 
 class ORBStrategy:
@@ -22,7 +24,9 @@ class ORBStrategy:
                  entry_start_time: time = ENTRY_START_TIME,
                  entry_end_time: time = ENTRY_END_TIME,
                  max_stop_losses_per_day: int = MAX_STOP_LOSSES_PER_DAY,
-                 max_stop_losses_per_symbol_per_day: int = MAX_STOP_LOSSES_PER_SYMBOL_PER_DAY):
+                 max_stop_losses_per_symbol_per_day: int = MAX_STOP_LOSSES_PER_SYMBOL_PER_DAY,
+                 atr_period: int | None = ATR_VALUE,
+                 volume_period: int | None = VOLUME_VALUE):
         self.orb_start = orb_start
         self.orb_end = orb_end
         self.forced_exit_time = forced_exit_time
@@ -33,6 +37,12 @@ class ORBStrategy:
         self.entry_end_time = entry_end_time
         self.max_stop_losses_per_day = max_stop_losses_per_day
         self.max_stop_losses_per_symbol_per_day = max_stop_losses_per_symbol_per_day
+        if atr_period is not None and atr_period <= 0:
+            raise ValueError("ATR period must be a positive integer")
+        self.atr_period = atr_period
+        if volume_period is not None and volume_period <= 0:
+            raise ValueError("Volume period must be a positive integer")
+        self.volume_period = volume_period
 
     @staticmethod
     def _validate_input(df):
@@ -44,8 +54,6 @@ class ORBStrategy:
     def prepare_data(self, df):
         self._validate_input(df)
         data = df.copy()
-        data['prev_candle_vol']=data.groupby('symbol')['volume'].shift(1)
-        data['vol_filter']=data['volume']>data['prev_candle_vol']
         data["trading_date"] = pd.to_datetime(data["date"]).dt.normalize()
         data["time"] = pd.to_datetime(data["time"].astype(str), format="mixed").dt.time
         data["timestamp"] = pd.to_datetime(
@@ -53,6 +61,30 @@ class ORBStrategy:
         )
         data["date"] = data["timestamp"]
         data = data.sort_values(["timestamp", "symbol"], kind="stable").reset_index(drop=True)
+        daily = aggregate_daily_ohlc(data)
+        if self.atr_period is None:
+            data["atr"] = float("nan")
+        else:
+            historical_atr = calculate_historical_atr(daily, self.atr_period)
+            data = data.merge(
+                historical_atr[["trading_date", "symbol", "atr"]],
+                on=["trading_date", "symbol"],
+                how="left",
+                sort=False,
+            )
+        if self.volume_period is None:
+            data["previous_day_volume"] = float("nan")
+            data["previous_volume_average"] = float("nan")
+            data["volume_eligible"] = False
+        else:
+            historical_volume = calculate_historical_volume_filter(daily, self.volume_period)
+            data = data.merge(
+                historical_volume[["trading_date", "symbol", "previous_day_volume",
+                                   "previous_volume_average", "volume_eligible"]],
+                on=["trading_date", "symbol"],
+                how="left",
+                sort=False,
+            )
         opening = data[(data["time"] >= self.orb_start) & (data["time"] < self.orb_end)]
         levels = opening.groupby(["trading_date", "symbol"], as_index=False).agg(
             orb_high=("high", "max"), orb_low=("low", "min")
@@ -61,15 +93,19 @@ class ORBStrategy:
         data = data.merge(levels, on=["trading_date", "symbol"], how="left", sort=False)
         entry_start = max(self.orb_end, self.entry_start_time)
         entry_end = min(self.forced_exit_time, self.entry_end_time)
-        data["entry_eligible"] = ((data["time"] >= entry_start)
-                                  & (data["time"] < entry_end)
-                                  & data["orb_range"].gt(0))
+        entry_eligible = ((data["time"] >= entry_start)
+                          & (data["time"] < entry_end)
+                          & data["orb_range"].gt(0))
+        if self.atr_period is not None:
+            entry_eligible &= data["atr"].notna() & data["orb_range"].lt(data["atr"])
+        if self.volume_period is not None:
+            entry_eligible &= data["volume_eligible"].fillna(False)
+        data["entry_eligible"] = entry_eligible
         return data.sort_values(["timestamp", "symbol"], kind="stable").reset_index(drop=True)
 
     def generate_signal(self, row):
         if not bool(row.get("entry_eligible", False)):
             return None
-        row_filter = row['vol_filter']
         close = float(row["close"])
         orb_high = float(row["orb_high"])
         orb_low = float(row["orb_low"])
@@ -77,11 +113,11 @@ class ORBStrategy:
 
         
 
-        if row_filter and (close > orb_high):
+        if close > orb_high:
             direction = "LONG"
             sl = close - self.sl_range_multiplier * orb_range
             target = close + self.target_range_multiplier * orb_range
-        elif row_filter and (close < orb_low):
+        elif close < orb_low:
             direction = "SHORT"
             sl = close + self.sl_range_multiplier * orb_range
             target = close - self.target_range_multiplier * orb_range
