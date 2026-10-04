@@ -43,14 +43,27 @@ def run(
     initial_capital=INITIAL_CAPITAL,
     max_open_positions=MAX_OPEN_POSITIONS,
     transaction_cost_model=None,
+    combination=None,
 ):
     raw = HistoricalDataLoader.load_json(str(data_path))
-    strategy = HigherHighStrategy()
+    exit_ema_period = EXIT_EMA_PERIOD
+    if combination is None:
+        strategy = HigherHighStrategy()
+    else:
+        from .run_combinations import (
+            combination_to_run_settings,
+            combination_to_strategy_kwargs,
+        )
+
+        strategy = HigherHighStrategy(**combination_to_strategy_kwargs(combination))
+        run_settings = combination_to_run_settings(combination)
+        max_open_positions = run_settings["max_open_positions"]
+        exit_ema_period = run_settings["exit_ema_period"]
     sizing = PositionSizingEngine(initial_capital, max_open_positions)
     engine = BacktestEngine(
         strategy,
         TradeEngine(),
-        ExitEngine([TargetExit(), SLExit(), EMAExit(EXIT_EMA_PERIOD)]),
+        ExitEngine([TargetExit(), SLExit(), EMAExit(exit_ema_period)]),
         sizing,
         transaction_cost_model=transaction_cost_model,
     )
@@ -69,10 +82,26 @@ def run(
         "report_folder": folder,
         "trades": trades,
         "position_sizing": sizing,
+        "combination": combination,
     }
 
 
 def main():
+    if __package__ in {None, ""}:
+        from Backtest.Strategies.Strategy_1_higher_high import config as strategy_config
+    else:
+        from . import config as strategy_config
+
+    if strategy_config.run_combinations:
+        if __package__ in {None, ""}:
+            from Backtest.Strategies.Strategy_1_higher_high.run_combinations import (
+                main as combinations_main,
+            )
+        else:
+            from .run_combinations import main as combinations_main
+        combinations_main()
+        return
+
     result = run()
     print(result["report"])
     print(f"Completed trades      : {len(result['trades'])}")
