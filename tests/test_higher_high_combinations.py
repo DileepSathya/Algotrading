@@ -26,6 +26,8 @@ def sample_config():
         "TARGET_PERCENT": [5.0, 10.0],
         "MAX_OPEN_POSITIONS": [4],
         "EXIT_EMA_PERIOD": [10],
+        "TRAIL_STOP_LOSS": [True],
+        "TRAIL_STOP_LOSS_CANDLE_COUNT": [2],
     }
 
 
@@ -70,7 +72,12 @@ class HigherHighCombinationUtilityTests(unittest.TestCase):
         )
         self.assertEqual(
             combination_to_run_settings(combinations[-1]),
-            {"max_open_positions": 4, "exit_ema_period": 10},
+            {
+                "max_open_positions": 4,
+                "exit_ema_period": 10,
+                "trail_stop_loss": True,
+                "trail_stop_loss_candle_count": 2,
+            },
         )
 
     def test_validation_rejects_missing_empty_and_invalid_values(self):
@@ -88,6 +95,11 @@ class HigherHighCombinationUtilityTests(unittest.TestCase):
         invalid["MAX_OPEN_POSITIONS"] = [2.5]
         with self.assertRaises(TypeError):
             validate_combination_config(invalid)
+
+        invalid_flag = sample_config()
+        invalid_flag["TRAIL_STOP_LOSS"] = [1]
+        with self.assertRaises(TypeError):
+            validate_combination_config(invalid_flag)
 
 
 class HigherHighCombinationWorkflowTests(unittest.TestCase):

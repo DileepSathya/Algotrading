@@ -20,7 +20,10 @@ if __package__ in {None, ""}:
         EXIT_EMA_PERIOD,
         INITIAL_CAPITAL,
         MAX_OPEN_POSITIONS,
+        TRAIL_STOP_LOSS,
+        TRAIL_STOP_LOSS_CANDLE_COUNT,
     )
+    from Backtest.Strategies.Strategy_1_higher_high.exits import TrailingStopExit
     from Backtest.Strategies.Strategy_1_higher_high.reporting import (
         save_higher_high_artifacts,
     )
@@ -32,7 +35,10 @@ else:
         EXIT_EMA_PERIOD,
         INITIAL_CAPITAL,
         MAX_OPEN_POSITIONS,
+        TRAIL_STOP_LOSS,
+        TRAIL_STOP_LOSS_CANDLE_COUNT,
     )
+    from .exits import TrailingStopExit
     from .reporting import save_higher_high_artifacts
     from .strategy import HigherHighStrategy
 
@@ -47,6 +53,8 @@ def run(
 ):
     raw = HistoricalDataLoader.load_json(str(data_path))
     exit_ema_period = EXIT_EMA_PERIOD
+    trail_stop_loss = TRAIL_STOP_LOSS
+    trail_stop_loss_candle_count = TRAIL_STOP_LOSS_CANDLE_COUNT
     if combination is None:
         strategy = HigherHighStrategy()
     else:
@@ -59,11 +67,17 @@ def run(
         run_settings = combination_to_run_settings(combination)
         max_open_positions = run_settings["max_open_positions"]
         exit_ema_period = run_settings["exit_ema_period"]
+        trail_stop_loss = run_settings["trail_stop_loss"]
+        trail_stop_loss_candle_count = run_settings["trail_stop_loss_candle_count"]
     sizing = PositionSizingEngine(initial_capital, max_open_positions)
+    exit_rules = [TargetExit(), SLExit()]
+    if trail_stop_loss:
+        exit_rules.append(TrailingStopExit(trail_stop_loss_candle_count))
+    exit_rules.append(EMAExit(exit_ema_period))
     engine = BacktestEngine(
         strategy,
         TradeEngine(),
-        ExitEngine([TargetExit(), SLExit(), EMAExit(exit_ema_period)]),
+        ExitEngine(exit_rules),
         sizing,
         transaction_cost_model=transaction_cost_model,
     )

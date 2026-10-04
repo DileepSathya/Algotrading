@@ -20,6 +20,8 @@ COMBINATION_PARAMETER_COLUMNS = (
     "TARGET_PERCENT",
     "MAX_OPEN_POSITIONS",
     "EXIT_EMA_PERIOD",
+    "TRAIL_STOP_LOSS",
+    "TRAIL_STOP_LOSS_CANDLE_COUNT",
 )
 
 COMBINATION_METRIC_COLUMNS = (
@@ -39,11 +41,22 @@ COMBINATION_SUMMARY_COLUMNS = COMBINATION_PARAMETER_COLUMNS + COMBINATION_METRIC
 
 _FLOAT_KEYS = frozenset({"CLOSE_THRESHOLD", "TARGET_PERCENT"})
 _INT_KEYS = frozenset(
-    {"EMA_PERIOD", "EMA_PERIOD_VOL", "MAX_OPEN_POSITIONS", "EXIT_EMA_PERIOD"}
+    {
+        "EMA_PERIOD",
+        "EMA_PERIOD_VOL",
+        "MAX_OPEN_POSITIONS",
+        "EXIT_EMA_PERIOD",
+        "TRAIL_STOP_LOSS_CANDLE_COUNT",
+    }
 )
+_BOOL_KEYS = frozenset({"TRAIL_STOP_LOSS"})
 
 
 def _validate_value(key: str, value: Any) -> None:
+    if key in _BOOL_KEYS:
+        if not isinstance(value, bool):
+            raise TypeError(f"{key} values must be bool, got {type(value)!r}")
+        return
     if key in _FLOAT_KEYS:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise TypeError(f"{key} values must be numeric, got {type(value)!r}")
@@ -94,12 +107,22 @@ def combination_to_run_settings(combination: dict[str, Any]) -> dict[str, int]:
     return {
         "max_open_positions": int(combination["MAX_OPEN_POSITIONS"]),
         "exit_ema_period": int(combination["EXIT_EMA_PERIOD"]),
+        "trail_stop_loss": bool(combination["TRAIL_STOP_LOSS"]),
+        "trail_stop_loss_candle_count": int(
+            combination["TRAIL_STOP_LOSS_CANDLE_COUNT"]
+        ),
     }
 
 
 def combination_to_csv_row(combination: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: (float(combination[key]) if key in _FLOAT_KEYS else int(combination[key]))
+        key: (
+            float(combination[key])
+            if key in _FLOAT_KEYS
+            else bool(combination[key])
+            if key in _BOOL_KEYS
+            else int(combination[key])
+        )
         for key in COMBINATION_PARAMETER_COLUMNS
     }
 
