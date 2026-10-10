@@ -16,6 +16,14 @@ from . import config as higher_high_config
 COMBINATION_PARAMETER_COLUMNS = (
     "CLOSE_THRESHOLD",
     "EMA_PERIOD",
+    "PRICE_ABOVE_EMA_PERIOD",
+    "EMA_FILTER",
+    "SMALLER_EMA_PERIOD",
+    "BIGGER_EMA_PERIOD",
+    "USE_RSI",
+    "RSI_PERIOD",
+    "RSI_MIN_VALUE",
+    "RSI_MAX_VALUE",
     "EMA_PERIOD_VOL",
     "TARGET_PERCENT",
     "MAX_OPEN_POSITIONS",
@@ -39,17 +47,24 @@ COMBINATION_METRIC_COLUMNS = (
 
 COMBINATION_SUMMARY_COLUMNS = COMBINATION_PARAMETER_COLUMNS + COMBINATION_METRIC_COLUMNS
 
-_FLOAT_KEYS = frozenset({"CLOSE_THRESHOLD", "TARGET_PERCENT"})
+_FLOAT_KEYS = frozenset(
+    {"CLOSE_THRESHOLD", "RSI_MIN_VALUE", "RSI_MAX_VALUE", "TARGET_PERCENT"}
+)
 _INT_KEYS = frozenset(
     {
         "EMA_PERIOD",
+        "SMALLER_EMA_PERIOD",
+        "BIGGER_EMA_PERIOD",
+        "RSI_PERIOD",
         "EMA_PERIOD_VOL",
         "MAX_OPEN_POSITIONS",
         "EXIT_EMA_PERIOD",
         "TRAIL_STOP_LOSS_CANDLE_COUNT",
     }
 )
-_BOOL_KEYS = frozenset({"TRAIL_STOP_LOSS"})
+_BOOL_KEYS = frozenset(
+    {"PRICE_ABOVE_EMA_PERIOD", "EMA_FILTER", "USE_RSI", "TRAIL_STOP_LOSS"}
+)
 
 
 def _validate_value(key: str, value: Any) -> None:
@@ -98,6 +113,14 @@ def combination_to_strategy_kwargs(combination: dict[str, Any]) -> dict[str, Any
     return {
         "close_threshold": float(combination["CLOSE_THRESHOLD"]),
         "ema_period": int(combination["EMA_PERIOD"]),
+        "price_above_ema_period": bool(combination["PRICE_ABOVE_EMA_PERIOD"]),
+        "ema_filter": bool(combination["EMA_FILTER"]),
+        "smaller_ema_period": int(combination["SMALLER_EMA_PERIOD"]),
+        "bigger_ema_period": int(combination["BIGGER_EMA_PERIOD"]),
+        "use_rsi": bool(combination["USE_RSI"]),
+        "rsi_period": int(combination["RSI_PERIOD"]),
+        "rsi_min_value": float(combination["RSI_MIN_VALUE"]),
+        "rsi_max_value": float(combination["RSI_MAX_VALUE"]),
         "ema_period_vol": int(combination["EMA_PERIOD_VOL"]),
         "target_percent": float(combination["TARGET_PERCENT"]),
     }
