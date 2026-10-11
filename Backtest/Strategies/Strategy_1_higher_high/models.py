@@ -22,6 +22,9 @@ class StrategySignal:
     target: float
 
     signal: bool = True
+    risk_per_unit: float | None = None
+    risk_fraction: float | None = None
+    metadata: dict | None = None
 
     def to_dict(self) -> dict:
         """

@@ -66,6 +66,7 @@ class HigherHighReportArtifactTests(unittest.TestCase):
                     "symbol_performance.csv",
                     "trades.csv",
                     "yearly_performance.csv",
+                    "settings.json",
                 },
             )
 

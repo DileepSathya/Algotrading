@@ -102,7 +102,9 @@ class BacktestEngine:
                     if closed_trade is not None:
                         self._process_daily_loss_closes(candles)
 
-            for row in candles:
+            rank_entries = getattr(self.strategy, "rank_entry_candidates", None)
+            entry_candles = rank_entries(candles) if rank_entries is not None else candles
+            for row in entry_candles:
                 symbol = str(row["symbol"])
                 if ((symbol in active_at_start and not allow_same_candle_reentry)
                         or self.trade_engine.has_active_trade(symbol)):

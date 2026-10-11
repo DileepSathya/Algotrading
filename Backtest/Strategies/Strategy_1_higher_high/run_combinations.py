@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import traceback
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,6 +32,17 @@ COMBINATION_PARAMETER_COLUMNS = (
     "TRAIL_STOP_LOSS",
     "TRAIL_STOP_LOSS_CANDLE_COUNT",
 )
+
+OPTIONAL_PARAMETER_DEFAULTS = {
+    "RISK_PER_TRADE_PCT": None,
+    "SIGNAL_RANKING": "alphabetical",
+    "MOMENTUM_LOOKBACK": 20,
+    "ATR_PERIOD": 14,
+    "MAX_EXTENSION_ATR": None,
+    "MIN_REWARD_RISK": None,
+}
+REQUIRED_PARAMETER_COLUMNS = COMBINATION_PARAMETER_COLUMNS
+COMBINATION_PARAMETER_COLUMNS += tuple(OPTIONAL_PARAMETER_DEFAULTS)
 
 COMBINATION_METRIC_COLUMNS = (
     "TOTAL_RETURN_PCT",
@@ -68,6 +80,22 @@ _BOOL_KEYS = frozenset(
 
 
 def _validate_value(key: str, value: Any) -> None:
+    if key in {"RISK_PER_TRADE_PCT", "MAX_EXTENSION_ATR", "MIN_REWARD_RISK"}:
+        if value is None:
+            return
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{key} values must be numeric or None")
+        if not math.isfinite(value) or value <= 0 or (key == "RISK_PER_TRADE_PCT" and value > 100):
+            raise ValueError(f"Invalid {key}: {value}")
+        return
+    if key == "SIGNAL_RANKING":
+        if value not in ("alphabetical", "momentum", "relative_volume"):
+            raise ValueError("SIGNAL_RANKING must be alphabetical, momentum or relative_volume")
+        return
+    if key in {"MOMENTUM_LOOKBACK", "ATR_PERIOD"}:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{key} must be a positive integer")
+        return
     if key in _BOOL_KEYS:
         if not isinstance(value, bool):
             raise TypeError(f"{key} values must be bool, got {type(value)!r}")
@@ -84,13 +112,13 @@ def _validate_value(key: str, value: Any) -> None:
 
 
 def validate_combination_config(combination_config: dict[str, list[Any]]) -> None:
-    missing = [key for key in COMBINATION_PARAMETER_COLUMNS if key not in combination_config]
+    missing = [key for key in REQUIRED_PARAMETER_COLUMNS if key not in combination_config]
     if missing:
         raise ValueError(f"COMBINATION_CONFIG missing required keys: {missing}")
     extra = sorted(set(combination_config) - set(COMBINATION_PARAMETER_COLUMNS))
     if extra:
         raise ValueError(f"COMBINATION_CONFIG has unknown keys: {extra}")
-    for key in COMBINATION_PARAMETER_COLUMNS:
+    for key in combination_config:
         values = combination_config[key]
         if not isinstance(values, list):
             raise TypeError(f"{key} must be a list, got {type(values)!r}")
@@ -102,9 +130,10 @@ def validate_combination_config(combination_config: dict[str, list[Any]]) -> Non
 
 def generate_combinations(combination_config: dict[str, list[Any]]) -> list[dict[str, Any]]:
     validate_combination_config(combination_config)
-    value_lists = [combination_config[key] for key in COMBINATION_PARAMETER_COLUMNS]
+    keys = [key for key in COMBINATION_PARAMETER_COLUMNS if key in combination_config]
+    value_lists = [combination_config[key] for key in keys]
     return [
-        dict(zip(COMBINATION_PARAMETER_COLUMNS, values))
+        dict(zip(keys, values))
         for values in itertools.product(*value_lists)
     ]
 
@@ -123,6 +152,7 @@ def combination_to_strategy_kwargs(combination: dict[str, Any]) -> dict[str, Any
         "rsi_max_value": float(combination["RSI_MAX_VALUE"]),
         "ema_period_vol": int(combination["EMA_PERIOD_VOL"]),
         "target_percent": float(combination["TARGET_PERCENT"]),
+        **{key.lower(): combination[key] for key in OPTIONAL_PARAMETER_DEFAULTS if key in combination},
     }
 
 
@@ -140,7 +170,9 @@ def combination_to_run_settings(combination: dict[str, Any]) -> dict[str, int]:
 def combination_to_csv_row(combination: dict[str, Any]) -> dict[str, Any]:
     return {
         key: (
-            float(combination[key])
+            combination.get(key, OPTIONAL_PARAMETER_DEFAULTS.get(key))
+            if key in OPTIONAL_PARAMETER_DEFAULTS
+            else float(combination[key])
             if key in _FLOAT_KEYS
             else bool(combination[key])
             if key in _BOOL_KEYS

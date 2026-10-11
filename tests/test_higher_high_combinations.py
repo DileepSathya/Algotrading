@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from Backtest.Strategies.Strategy_1_higher_high.run_backtest import main as run_
 from Backtest.Strategies.Strategy_1_higher_high.run_combinations import (
     COMBINATION_SUMMARY_COLUMNS,
     combination_to_run_settings,
+    combination_to_csv_row,
     combination_to_strategy_kwargs,
     generate_combinations,
     run_combination_batch,
@@ -65,6 +67,34 @@ def sample_report():
 
 
 class HigherHighCombinationUtilityTests(unittest.TestCase):
+    def test_new_controls_expand_map_and_serialize(self):
+        grid = {key: [values[0]] for key, values in sample_config().items()}
+        grid.update(RISK_PER_TRADE_PCT=[None, .75],
+                    SIGNAL_RANKING=['alphabetical', 'momentum', 'relative_volume'],
+                    MOMENTUM_LOOKBACK=[20], ATR_PERIOD=[14],
+                    MAX_EXTENSION_ATR=[None, 2.0], MIN_REWARD_RISK=[None, 1.5])
+        combinations = generate_combinations(grid)
+        self.assertEqual(len(combinations), 24)
+        kwargs = combination_to_strategy_kwargs(combinations[-1])
+        self.assertEqual(kwargs['risk_per_trade_pct'], .75)
+        self.assertEqual(kwargs['signal_ranking'], 'relative_volume')
+        self.assertEqual(kwargs['momentum_lookback'], 20)
+        self.assertEqual(kwargs['atr_period'], 14)
+        self.assertEqual(kwargs['max_extension_atr'], 2.0)
+        self.assertEqual(kwargs['min_reward_risk'], 1.5)
+        self.assertIsNone(combination_to_csv_row(combinations[0])['RISK_PER_TRADE_PCT'])
+        self.assertEqual(combination_to_csv_row(combinations[-1])['SIGNAL_RANKING'], 'relative_volume')
+
+    def test_new_control_validation_rejects_invalid_values(self):
+        for key, value in [('RISK_PER_TRADE_PCT', 0), ('RISK_PER_TRADE_PCT', 101),
+                           ('MAX_EXTENSION_ATR', float('nan')), ('MIN_REWARD_RISK', -1),
+                           ('SIGNAL_RANKING', 'unknown'), ('ATR_PERIOD', 0),
+                           ('MOMENTUM_LOOKBACK', True)]:
+            grid = sample_config()
+            grid[key] = [value]
+            with self.subTest(key=key, value=value), self.assertRaises((ValueError, TypeError)):
+                generate_combinations(grid)
+
     def test_generates_cartesian_product_and_maps_parameters(self):
         combinations = generate_combinations(sample_config())
 
@@ -134,6 +164,29 @@ class HigherHighCombinationUtilityTests(unittest.TestCase):
 
 
 class HigherHighCombinationWorkflowTests(unittest.TestCase):
+    def test_real_batch_applies_risk_and_records_new_controls(self):
+        configuration = {key: [values[0]] for key, values in sample_config().items()}
+        configuration.update(EMA_PERIOD=[1], USE_RSI=[False], EMA_FILTER=[False],
+                             TRAIL_STOP_LOSS=[False], RISK_PER_TRADE_PCT=[.5],
+                             SIGNAL_RANKING=['relative_volume'], MOMENTUM_LOOKBACK=[2],
+                             ATR_PERIOD=[2], MAX_EXTENSION_ATR=[None], MIN_REWARD_RISK=[None])
+        candles = [dict(symbol='A', date=f'2024-01-0{day}', open=price - 1,
+                        high=price + .1, low=price - 10, close=price, volume=1000)
+                   for day, price in enumerate([100, 101, 102], 1)]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / 'data.json'
+            path.write_text(json.dumps(candles), encoding='utf-8')
+            result = run_combination_batch(data_path=path, reports_root=root,
+                                            combination_config=configuration)
+            self.assertEqual((result['completed'], result['failed']), (1, 0))
+            row = pd.read_csv(result['summary_csv']).iloc[0]
+            self.assertEqual(row.RISK_PER_TRADE_PCT, .5)
+            self.assertEqual(row.SIGNAL_RANKING, 'relative_volume')
+            self.assertTrue(pd.isna(row.MAX_EXTENSION_ATR))
+            trades = pd.read_csv(next(root.rglob('trades.csv')))
+            self.assertEqual(trades.iloc[0]['quantity'], 50)
+
     def test_batch_continues_after_failure_and_writes_consolidated_summary(self):
         configuration = sample_config()
         configuration["CLOSE_THRESHOLD"] = [0.7]
@@ -180,7 +233,7 @@ class HigherHighCombinationWorkflowTests(unittest.TestCase):
                 "Backtest.Strategies.Strategy_1_higher_high.run_backtest.run",
                 return_value=single_result,
             ) as single_run:
-                run_backtest_main()
+                run_backtest_main(["--single"])
                 single_run.assert_called_once_with()
 
         with mock.patch.object(higher_high_config, "run_combinations", True):

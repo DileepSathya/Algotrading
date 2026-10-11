@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 
 from .config import (
@@ -48,7 +50,7 @@ class HigherHighStrategy:
 
     Target
     ------
-    Target = entry price + 10%
+    Target = entry price + configured target percentage
     """
 
     def __init__(
@@ -65,6 +67,12 @@ class HigherHighStrategy:
         rsi_max_value: float = RSI_MAX_VALUE,
         ema_period_vol: int = EMA_PERIOD_VOL,
         target_percent: float = TARGET_PERCENT,
+        risk_per_trade_pct: float | None = None,
+        signal_ranking: str = "alphabetical",
+        momentum_lookback: int = 20,
+        atr_period: int = 14,
+        max_extension_atr: float | None = None,
+        min_reward_risk: float | None = None,
     ):
         self.close_threshold = close_threshold
         self.ema_period = ema_period
@@ -82,6 +90,27 @@ class HigherHighStrategy:
         self.rsi_column = f"rsi_{self.rsi_period}"
         self.ema_period_vol = ema_period_vol
         self.target_percent = target_percent
+        for name, value in (("risk_per_trade_pct", risk_per_trade_pct),
+                            ("max_extension_atr", max_extension_atr),
+                            ("min_reward_risk", min_reward_risk)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value) or value <= 0):
+                raise ValueError(f"{name} must be a finite positive number or None")
+        if risk_per_trade_pct is not None and risk_per_trade_pct > 100:
+            raise ValueError("risk_per_trade_pct must be at most 100")
+        for name, value in (("momentum_lookback", momentum_lookback), ("atr_period", atr_period)):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if signal_ranking not in {"alphabetical", "momentum", "relative_volume"}:
+            raise ValueError("signal_ranking must be alphabetical, momentum or relative_volume")
+        self.risk_per_trade_pct = risk_per_trade_pct
+        self.signal_ranking = signal_ranking
+        self.momentum_lookback = momentum_lookback
+        self.atr_period = atr_period
+        self.max_extension_atr = max_extension_atr
+        self.min_reward_risk = min_reward_risk
+        self.entry_start = None
+        self.entry_end = None
 
     # ==================================================
     # PUBLIC METHOD
@@ -291,6 +320,19 @@ class HigherHighStrategy:
         dropna_columns = list(data.columns)
         if not self.use_rsi:
             dropna_columns.remove(self.rsi_column)
+        # New diagnostic indicators must not change the original warmup or
+        # remove candles needed to manage an already-open position.
+        true_range = pd.concat([
+            data["high"] - data["low"],
+            (data["high"] - data["prev_day_close"]).abs(),
+            (data["low"] - data["prev_day_close"]).abs(),
+        ], axis=1).max(axis=1)
+        data["atr"] = true_range.groupby(data["symbol"]).transform(
+            lambda values: values.rolling(self.atr_period, min_periods=self.atr_period).mean()
+        )
+        previous = data.groupby("symbol")["close"].shift(self.momentum_lookback)
+        data["momentum_return"] = (data["close"] / previous.where(previous > 0) - 1) * 100
+        data["relative_volume"] = data["volume"] / data["20_vol_ma"].where(data["20_vol_ma"] > 0)
         data = data.dropna(subset=dropna_columns)
 
 
@@ -313,6 +355,15 @@ class HigherHighStrategy:
 
         if not bool(row["trade_signal"]):
             return None
+        date = pd.Timestamp(row["date"])
+        if self.entry_start is not None and date < self.entry_start:
+            return None
+        if self.entry_end is not None and date > self.entry_end:
+            return None
+        if self.signal_ranking != "alphabetical":
+            column = "momentum_return" if self.signal_ranking == "momentum" else "relative_volume"
+            if not math.isfinite(float(row.get(column, float("nan")))):
+                return None
 
         entry_price = float(
             row["close"]
@@ -339,13 +390,46 @@ class HigherHighStrategy:
             )
         )
 
+        risk = entry_price - sl
+        reward_risk = (target - entry_price) / risk if risk > 0 else float("nan")
+        atr = float(row.get("atr", float("nan")))
+        extension = (entry_price - float(row[self.ema_column])) / atr if atr > 0 else float("nan")
+        if self.max_extension_atr is not None and (
+            not math.isfinite(extension) or extension > self.max_extension_atr
+        ):
+            return None
+        if self.min_reward_risk is not None and (
+            not math.isfinite(reward_risk) or reward_risk < self.min_reward_risk
+        ):
+            return None
+        if self.risk_per_trade_pct is not None and (not math.isfinite(risk) or risk <= 0):
+            return None
+
         return StrategySignal(
             symbol=str(row["symbol"]),
             entry_date=row["date"],
             entry_price=entry_price,
             sl=sl,
             target=target,
+            risk_per_unit=risk if self.risk_per_trade_pct is not None else None,
+            risk_fraction=self.risk_per_trade_pct / 100 if self.risk_per_trade_pct is not None else None,
+            metadata={"initial_risk_per_unit": risk, "entry_reward_risk": reward_risk,
+                      "entry_extension_atr": extension,
+                      "entry_relative_volume": row.get("relative_volume", float("nan")),
+                      "entry_momentum_return": row.get("momentum_return", float("nan"))},
         )
+
+    def rank_entry_candidates(self, rows):
+        """Order only this day's entries; exits retain their original order."""
+        if self.signal_ranking == "alphabetical":
+            return rows
+        column = "momentum_return" if self.signal_ranking == "momentum" else "relative_volume"
+
+        def key(row):
+            value = float(row.get(column, float("nan")))
+            return (-value if math.isfinite(value) else float("inf"), str(row["symbol"]))
+
+        return sorted(rows, key=key)
 
     # ==================================================
     # VALIDATION
