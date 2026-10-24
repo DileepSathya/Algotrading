@@ -49,7 +49,7 @@ MAX_EXTENSION_ATR = None
 MIN_REWARD_RISK = None
 
 # Running run_backtest.py compares named experiments by default.
-RUN_EXPERIMENTS = True
+RUN_EXPERIMENTS = False
 EXPERIMENT_VALIDATION = True
 VALIDATION_TRAIN_YEARS = 2
 VALIDATION_MIN_TRADES = 30
@@ -57,7 +57,7 @@ VALIDATION_MIN_TRADES = 30
 
 # When False, RUN_EXPERIMENTS selects comparisons or a single run.
 # When True, run_combinations executes the Cartesian product of COMBINATION_CONFIG.
-run_combinations = True
+run_combinations = False
 
 COMBINATION_CONFIG = {
     "CLOSE_THRESHOLD": [0.70],
