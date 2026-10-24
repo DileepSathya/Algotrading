@@ -379,6 +379,27 @@ class HigherHighStrategy:
 
         signals_df.to_csv(output_path, index=False)
 
+        today = pd.Timestamp.now(tz="Asia/Kolkata").date()
+        signal_dates = pd.to_datetime(signals_df["date"])
+        if signal_dates.dt.tz is not None:
+            signal_dates = signal_dates.dt.tz_convert("Asia/Kolkata")
+
+        current_month_signals = signals_df.loc[
+            (signal_dates.dt.year == today.year)
+            & (signal_dates.dt.month == today.month)
+        ]
+        current_day_signals = signals_df.loc[
+            signal_dates.dt.date == today
+        ]
+
+        for filename, selected_signals in (
+            ("current_month_signals.csv", current_month_signals),
+            ("current_day_signals.csv", current_day_signals),
+        ):
+            selected_path = output_path.with_name(filename)
+            selected_signals.to_csv(selected_path, index=False)
+            print(f"Saved {len(selected_signals)} signals to: {selected_path}")
+
         print(f"Generated {len(signals_df)} signals.")
         print(f"Saved to: {output_path}")
 
