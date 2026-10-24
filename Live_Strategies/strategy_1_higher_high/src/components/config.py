@@ -33,6 +33,7 @@ PUT_SL_PCT = 50.0
 # Use a numeric percentage gain (100 means entry price x 2), or "prev_day_high".
 PUT_TG_PCT = "prev_day_high"
 PUT_LOT_SIZE = 1
+OPTION_QUANTITY_FILE = Path(__file__).resolve().parents[2] / "artifacts/stock_opt_qty.json"
 # --------------------------------------------------
 # Backtest configuration
 # --------------------------------------------------

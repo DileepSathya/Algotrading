@@ -1,4 +1,5 @@
 import sys
+import json
 import tempfile
 import unittest
 from datetime import date
@@ -14,6 +15,12 @@ from src.components.put_option_retrival import DataRetrieval as LivePutData
 
 
 class HistoricalPutTests(unittest.TestCase):
+    def test_option_quantity_file_is_valid_json(self):
+        quantity_file = Path(__file__).resolve().parents[1] / 'Live_Strategies/strategy_1_higher_high/artifacts/stock_opt_qty.json'
+        quantities = json.loads(quantity_file.read_text(encoding='utf-8'))
+        self.assertEqual(quantities['SBIN'], 750)
+        self.assertEqual(quantities['M&M'], 200)
+
     def provider(self):
         provider = HistoricalOptionData.__new__(HistoricalOptionData)
         provider.fyers = Mock()
@@ -39,7 +46,7 @@ class HistoricalPutTests(unittest.TestCase):
         self.assertEqual(result['iv'], 24)
         self.assertEqual(result['expiry_timestamp'], str(int(pd.Timestamp('2026-09-29 15:30', tz='Asia/Kolkata').timestamp())))
         self.assertEqual(result['put_entry_price'], 12.5)
-        provider.get_contract_history.assert_called_once_with('NSE:SBIN26SEP800PE', '2026-08-24', '2026-08-24', resolution='1D')
+        provider.get_contract_history.assert_any_call('NSE:SBIN26SEP800PE', '2026-08-24', '2026-08-24', resolution='1D')
         self.assertGreater(provider.get_expiries.call_args.args[2], '2026-09-29')
 
     def test_no_earlier_matching_delta_fallback(self):
@@ -118,7 +125,7 @@ class HistoricalPutTests(unittest.TestCase):
             data = pd.read_csv(output)
             self.assertEqual(list(data.columns), ['date', 'symbol', 'symbol_entry_price', 'symbol_SL_price',
                 'symbol_TG_price', 'put_symbol', 'put_entry_price', 'expiry', 'expiry_timestamp', 'strike', 'delta', 'iv', 'expiry_month',
-                'put_SL_price', 'put_TG_price', 'put_lot_size'])
+                'put_SL_price', 'put_TG_price', 'put_lot_size', 'quantity'])
             self.assertEqual(len(data), 2)
             self.assertEqual(data['put_entry_price'].tolist(), [12.5, 12.5])
             for filename in ('current_month_signals.csv', 'current_day_signals.csv'):
@@ -142,6 +149,7 @@ class HistoricalPutTests(unittest.TestCase):
                 self.assertEqual(row['put_SL_price'], 6.25)
                 self.assertEqual(row['put_TG_price'], 25.0)
                 self.assertEqual(row['put_lot_size'], 1)
+                self.assertEqual(row['quantity'], 750)
 
     def test_previous_day_high_target_uses_selected_put_contract(self):
         strategy = HigherHighStrategy()

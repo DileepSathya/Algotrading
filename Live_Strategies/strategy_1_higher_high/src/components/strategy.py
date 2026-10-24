@@ -1,5 +1,6 @@
 
 import math
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -20,6 +21,7 @@ from .config import (
     PUT_SL_PCT,
     PUT_TG_PCT,
     PUT_LOT_SIZE,
+    OPTION_QUANTITY_FILE,
 )
 
 from .models import StrategySignal
@@ -374,6 +376,13 @@ class HigherHighStrategy:
                 })
 
         from src import logger
+        quantities = {}
+        try:
+            raw_quantities = json.loads(OPTION_QUANTITY_FILE.read_text(encoding='utf-8-sig'))
+            quantities = {symbol.strip().upper(): int(quantity)
+                          for symbol, quantity in raw_quantities.items()}
+        except (OSError, ValueError, TypeError, AttributeError):
+            logger.exception('Could not read option quantities from %s', OPTION_QUANTITY_FILE)
         option_columns = ['put_symbol', 'put_entry_price', 'expiry', 'expiry_timestamp', 'strike',
                           'delta', 'iv', 'expiry_month']
         today = pd.Timestamp.now(tz="Asia/Kolkata").date()
@@ -415,13 +424,16 @@ class HigherHighStrategy:
             except (TypeError, ValueError):
                 entry = None
             signal['put_lot_size'] = PUT_LOT_SIZE
+            underlying = signal['symbol'].split(':')[-1].removesuffix('-EQ').upper()
+            lot_quantity = quantities.get(underlying)
+            signal['quantity'] = lot_quantity * PUT_LOT_SIZE if lot_quantity is not None else None
             signal['put_SL_price'] = entry * (1 - PUT_SL_PCT / 100) if entry is not None else None
             if PUT_TG_PCT == 'prev_day_high':
                 signal['put_TG_price'] = signal.get('put_prev_day_high') if entry is not None else None
             else:
                 signal['put_TG_price'] = entry * (1 + PUT_TG_PCT / 100) if entry is not None else None
         columns = ['date', 'symbol', 'symbol_entry_price', 'symbol_SL_price',
-                   'symbol_TG_price', *option_columns, 'put_SL_price', 'put_TG_price', 'put_lot_size']
+                   'symbol_TG_price', *option_columns, 'put_SL_price', 'put_TG_price', 'put_lot_size', 'quantity']
         signals_df = pd.DataFrame(signals, columns=columns)
 
         signals_df = signals_df.sort_values(
