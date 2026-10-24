@@ -1,6 +1,7 @@
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import math
 
 import pandas as pd
 
@@ -121,7 +122,10 @@ class DataRetrieval:
     def get_option_chain_data(
         self,
         symbol: str,
-        strike_count: int = 10
+        strike_count: int = 10,
+        expiry_date=None,
+        request=None,
+        allow_nearest_delta=False,
     ):
         """
         Fetch option chain, select expiry automatically,
@@ -136,9 +140,12 @@ class DataRetrieval:
             "greeks": "1"
         }
 
-        initial_response = self.fyers.optionchain(
-            data=initial_payload
-        )
+        def fetch(payload):
+            if request is not None:
+                return request(self.fyers.optionchain, payload)
+            return self.fyers.optionchain(data=payload)
+
+        initial_response = fetch(initial_payload)
 
         if initial_response.get("s") != "ok":
             logger.error(
@@ -176,9 +183,15 @@ class DataRetrieval:
 
         # Step 3: Select expiry using approved rules.
         try:
-            selected_expiry, nearest_days = (
-                self.select_expiry(expiries)
-            )
+            if expiry_date is None:
+                selected_expiry, nearest_days = self.select_expiry(expiries)
+            else:
+                requested_date = pd.Timestamp(expiry_date).date()
+                selected_expiry = next((item for item in expiries
+                                        if item['expiry_date'] == requested_date), None)
+                if selected_expiry is None:
+                    raise ValueError(f'Requested expiry {requested_date} is unavailable in live chain')
+                nearest_days = self.EXPIRY_THRESHOLD_DAYS + 1
 
         except ValueError as exc:
             logger.error(str(exc))
@@ -202,9 +215,7 @@ class DataRetrieval:
             "greeks": "1"
         }
 
-        response = self.fyers.optionchain(
-            data=selected_payload
-        )
+        response = fetch(selected_payload)
 
         if response.get("s") != "ok":
             logger.error(
@@ -235,9 +246,7 @@ class DataRetrieval:
             except (TypeError, ValueError):
                 continue
 
-            if not (
-                self.DELTA_MIN <= delta <= self.DELTA_MAX
-            ):
+            if not math.isfinite(delta) or not -1 <= delta <= 0:
                 continue
 
             selected_puts.append({
@@ -279,6 +288,16 @@ class DataRetrieval:
             columns=columns
         )
 
+        if not result.empty:
+            in_range = result['delta'].between(self.DELTA_MIN, self.DELTA_MAX)
+            if in_range.any() or not allow_nearest_delta:
+                result = result.loc[in_range].copy()
+            else:
+                logger.warning(
+                    'No puts within delta %s to %s for %s expiry %s; '
+                    'using nearest available delta to -0.375',
+                    self.DELTA_MIN, self.DELTA_MAX, symbol, selected_expiry['date'])
+
         if result.empty:
             print(
                 "\nNo PUT options found for expiry "
@@ -294,7 +313,7 @@ class DataRetrieval:
         ).abs()
 
         result = (
-            result.sort_values("_delta_distance")
+            result.sort_values(["_delta_distance", "strike_price", "symbol"])
             .drop(columns="_delta_distance")
             .reset_index(drop=True)
         )

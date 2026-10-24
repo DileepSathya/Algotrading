@@ -346,10 +346,10 @@ class HigherHighStrategy:
         return sorted(rows, key=key)
 
     
-    def save_signals_to_csv(self, df: pd.DataFrame) -> None:
+    def save_signals_to_csv(self, df: pd.DataFrame, option_provider=None, output_path=None) -> None:
         """Generate entry signals and save them to CSV."""
 
-        output_path = Path(
+        output_path = Path(output_path) if output_path is not None else Path(
             r"D:\FM\ALGOTRADING\Live_Strategies\strategy_1_higher_high"
             r"\artifacts\trades\higher_high_signals.csv"
         )
@@ -365,12 +365,44 @@ class HigherHighStrategy:
                 signals.append({
                     "date": signal.entry_date,
                     "symbol": signal.symbol,
-                    "entry_price": signal.entry_price,
-                    "sl": signal.sl,
-                    "target": signal.target,
+                    "symbol_entry_price": signal.entry_price,
+                    "symbol_SL_price": signal.sl,
+                    "symbol_TG_price": signal.target,
                 })
 
-        columns = ["date", "symbol", "entry_price", "sl", "target"]
+        from src import logger
+        option_columns = ['put_symbol', 'put_entry_price', 'expiry', 'expiry_timestamp', 'strike',
+                          'delta', 'iv', 'expiry_month']
+        today = pd.Timestamp.now(tz="Asia/Kolkata").date()
+        current_month_signals_to_enrich = []
+        for signal in signals:
+            signal.update({column: None for column in option_columns})
+            day = pd.Timestamp(signal['date'])
+            if day.tzinfo is not None:
+                day = day.tz_convert('Asia/Kolkata')
+            if (day.year, day.month) == (today.year, today.month):
+                current_month_signals_to_enrich.append(signal)
+        if current_month_signals_to_enrich and option_provider is None:
+            try:
+                from .historical_put_option import HistoricalOptionData
+                option_provider = HistoricalOptionData()
+            except Exception:
+                logger.exception('Option provider initialization failed; retaining stock signals')
+        option_cache = {}
+        for signal in current_month_signals_to_enrich:
+            day = pd.Timestamp(signal['date'])
+            if day.tzinfo is not None:
+                day = day.tz_convert('Asia/Kolkata')
+            key = (signal['symbol'], day.date().isoformat())
+            if key not in option_cache:
+                try:
+                    option_cache[key] = option_provider.select_for_signal(*key) if option_provider is not None else {}
+                except Exception:
+                    logger.exception('Option enrichment failed for %s on %s', *key)
+                    option_cache[key] = {}
+            signal.update({column: option_cache[key].get(column) for column in option_columns})
+        columns = ['date', 'symbol', 'symbol_entry_price', 'symbol_SL_price',
+                   'symbol_TG_price', *option_columns]
         signals_df = pd.DataFrame(signals, columns=columns)
 
         signals_df = signals_df.sort_values(
@@ -379,7 +411,6 @@ class HigherHighStrategy:
 
         signals_df.to_csv(output_path, index=False)
 
-        today = pd.Timestamp.now(tz="Asia/Kolkata").date()
         signal_dates = pd.to_datetime(signals_df["date"])
         if signal_dates.dt.tz is not None:
             signal_dates = signal_dates.dt.tz_convert("Asia/Kolkata")
