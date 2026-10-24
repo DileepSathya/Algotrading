@@ -11,6 +11,7 @@ import pandas as pd
 from fyers_apiv3 import fyersModel
 from src import logger
 from src.configurations.config import config_manager
+from .config import PUT_TG_PCT
 
 
 class HistoricalOptionData:
@@ -79,13 +80,16 @@ class HistoricalOptionData:
             return {}
         row = frame.iloc[0]
         month_diff = (expiry.year - signal_day.year) * 12 + expiry.month - signal_day.month
-        return {
+        result = {
             'put_symbol': row['symbol'], 'expiry': expiry.isoformat(),
             'expiry_timestamp': row['expiry_timestamp'], 'strike': row['strike_price'],
             'delta': row['delta'], 'iv': row['iv'],
             'put_entry_price': self.get_daily_close(row['symbol'], signal_day),
             'expiry_month': {0: 'current_month', 1: 'next_month'}.get(month_diff, 'other_month'),
         }
+        if PUT_TG_PCT == 'prev_day_high':
+            result['put_prev_day_high'] = self.get_previous_day_high(row['symbol'], signal_day)
+        return result
 
     @staticmethod
     def now():
@@ -133,6 +137,42 @@ class HistoricalOptionData:
                 logger.info('Recorded daily put close: %s | signal date %s | close %s',
                             option_symbol, signal_day, cache[key])
         return cache[key]
+
+    def get_previous_day_high(self, option_symbol, signal_day, expired=False):
+        """Return the latest completed trading day's high before the signal date."""
+        cache = self.__dict__.setdefault('_previous_high_cache', {})
+        key = (option_symbol, signal_day.isoformat(), expired)
+        if key in cache:
+            return cache[key]
+        start = (signal_day - timedelta(days=14)).isoformat()
+        end = (signal_day - timedelta(days=1)).isoformat()
+        try:
+            if expired:
+                history = self.get_contract_history(option_symbol, start, end, resolution='1D')
+                if history.empty or 'high' not in history or 'timestamp' not in history:
+                    return None
+                candles = ((pd.Timestamp(row['timestamp']).date(), row['high'])
+                           for _, row in history.iterrows())
+            else:
+                response = self._request(self.fyers.history, {
+                    'symbol': option_symbol, 'resolution': 'D', 'date_format': '1',
+                    'range_from': start, 'range_to': end, 'cont_flag': '0'})
+                if response.get('s') != 'ok':
+                    logger.warning('Previous put high retrieval failed for %s on %s', option_symbol, signal_day)
+                    return None
+                candles = ((pd.to_datetime(row[0], unit='s', utc=True).tz_convert('Asia/Kolkata').date(), row[2])
+                           for row in response.get('candles', []) if len(row) >= 3)
+            valid = []
+            for candle_day, high in candles:
+                price = self.valid_close(high)
+                if candle_day < signal_day and price is not None:
+                    valid.append((candle_day, price))
+        except Exception:
+            logger.exception('Previous put high retrieval failed for %s on %s', option_symbol, signal_day)
+            return None
+        result = max(valid)[1] if valid else None
+        cache[key] = result
+        return result
 
     def select_for_signal(self, underlying, signal_date):
         """Use historical session Greeks for expired contracts, live for active ones.
@@ -195,19 +235,23 @@ class HistoricalOptionData:
                 if iv is not None and not math.isfinite(iv):
                     iv = None
                 month_diff = (expiry.year - day.year) * 12 + expiry.month - day.month
-                matches.append({
+                match = {
                     'put_symbol': contract, 'expiry': expiry.isoformat(),
                     'expiry_timestamp': str(int(pd.Timestamp(f'{expiry} 15:30', tz='Asia/Kolkata').timestamp())),
                     'strike': strike, 'delta': delta, 'iv': iv,
                     'put_entry_price': self.valid_close(last.get('close')),
                     'expiry_month': {0: 'current_month', 1: 'next_month'}.get(month_diff, 'other_month'),
-                })
+                }
+                matches.append(match)
             except Exception:
                 logger.exception('Historical put lookup failed for %s on %s', contract, day)
         if not matches:
             logger.warning('No session-close put matched delta range for %s on %s', underlying, day)
             return {}
-        return min(matches, key=lambda row: (abs(row['delta'] + 0.375), row['strike'], row['put_symbol']))
+        selected = min(matches, key=lambda row: (abs(row['delta'] + 0.375), row['strike'], row['put_symbol']))
+        if PUT_TG_PCT == 'prev_day_high':
+            selected['put_prev_day_high'] = self.get_previous_day_high(selected['put_symbol'], day, expired=True)
+        return selected
 
     @staticmethod
     def contract_strike(underlying, contract, expiry):

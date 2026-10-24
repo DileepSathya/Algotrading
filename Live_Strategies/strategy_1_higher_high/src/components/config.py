@@ -29,6 +29,10 @@ EMA_PERIOD_VOL = 10
 # Target configuration
 # --------------------------------------------------
 TARGET_PERCENT = 7.0
+PUT_SL_PCT = 50.0
+# Use a numeric percentage gain (100 means entry price x 2), or "prev_day_high".
+PUT_TG_PCT = "prev_day_high"
+PUT_LOT_SIZE = 1
 # --------------------------------------------------
 # Backtest configuration
 # --------------------------------------------------

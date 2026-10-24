@@ -17,6 +17,9 @@ from .config import (
     SMALLER_EMA_PERIOD,
     TARGET_PERCENT,
     USE_RSI,
+    PUT_SL_PCT,
+    PUT_TG_PCT,
+    PUT_LOT_SIZE,
 )
 
 from .models import StrategySignal
@@ -377,6 +380,7 @@ class HigherHighStrategy:
         current_month_signals_to_enrich = []
         for signal in signals:
             signal.update({column: None for column in option_columns})
+            signal['put_prev_day_high'] = None
             day = pd.Timestamp(signal['date'])
             if day.tzinfo is not None:
                 day = day.tz_convert('Asia/Kolkata')
@@ -401,8 +405,23 @@ class HigherHighStrategy:
                     logger.exception('Option enrichment failed for %s on %s', *key)
                     option_cache[key] = {}
             signal.update({column: option_cache[key].get(column) for column in option_columns})
+            signal['put_prev_day_high'] = option_cache[key].get('put_prev_day_high')
+        for signal in signals:
+            entry = signal.get('put_entry_price')
+            try:
+                entry = float(entry)
+                if not math.isfinite(entry) or entry <= 0:
+                    entry = None
+            except (TypeError, ValueError):
+                entry = None
+            signal['put_lot_size'] = PUT_LOT_SIZE
+            signal['put_SL_price'] = entry * (1 - PUT_SL_PCT / 100) if entry is not None else None
+            if PUT_TG_PCT == 'prev_day_high':
+                signal['put_TG_price'] = signal.get('put_prev_day_high') if entry is not None else None
+            else:
+                signal['put_TG_price'] = entry * (1 + PUT_TG_PCT / 100) if entry is not None else None
         columns = ['date', 'symbol', 'symbol_entry_price', 'symbol_SL_price',
-                   'symbol_TG_price', *option_columns]
+                   'symbol_TG_price', *option_columns, 'put_SL_price', 'put_TG_price', 'put_lot_size']
         signals_df = pd.DataFrame(signals, columns=columns)
 
         signals_df = signals_df.sort_values(

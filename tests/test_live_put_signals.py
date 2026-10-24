@@ -117,12 +117,84 @@ class HistoricalPutTests(unittest.TestCase):
             strategy.save_signals_to_csv(candles, option_provider=provider, output_path=output)
             data = pd.read_csv(output)
             self.assertEqual(list(data.columns), ['date', 'symbol', 'symbol_entry_price', 'symbol_SL_price',
-                'symbol_TG_price', 'put_symbol', 'put_entry_price', 'expiry', 'expiry_timestamp', 'strike', 'delta', 'iv', 'expiry_month'])
+                'symbol_TG_price', 'put_symbol', 'put_entry_price', 'expiry', 'expiry_timestamp', 'strike', 'delta', 'iv', 'expiry_month',
+                'put_SL_price', 'put_TG_price', 'put_lot_size'])
             self.assertEqual(len(data), 2)
             self.assertEqual(data['put_entry_price'].tolist(), [12.5, 12.5])
             for filename in ('current_month_signals.csv', 'current_day_signals.csv'):
                 self.assertEqual(list(pd.read_csv(Path(directory) / filename).columns), list(data.columns))
         provider.select_for_signal.assert_called_once()
+
+    def test_put_prices_and_lot_are_exported_for_percent_target(self):
+        strategy = HigherHighStrategy()
+        candles = pd.DataFrame([{'date': pd.Timestamp.now(tz='Asia/Kolkata').normalize(),
+            'symbol': 'NSE:SBIN-EQ', 'trade_signal': True, 'close': 820,
+            'low': 800, strategy.ema_column: 790}])
+        strategy.prepare_data = Mock(return_value=candles)
+        provider = Mock()
+        provider.select_for_signal.return_value = {'put_symbol': 'PUT', 'put_entry_price': 12.5}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('src.components.strategy.PUT_TG_PCT', 100):
+            output = Path(directory) / 'higher_high_signals.csv'
+            strategy.save_signals_to_csv(candles, option_provider=provider, output_path=output)
+            for filename in ('higher_high_signals.csv', 'current_month_signals.csv', 'current_day_signals.csv'):
+                row = pd.read_csv(Path(directory) / filename).iloc[0]
+                self.assertEqual(row['put_SL_price'], 6.25)
+                self.assertEqual(row['put_TG_price'], 25.0)
+                self.assertEqual(row['put_lot_size'], 1)
+
+    def test_previous_day_high_target_uses_selected_put_contract(self):
+        strategy = HigherHighStrategy()
+        candles = pd.DataFrame([{'date': pd.Timestamp.now(tz='Asia/Kolkata').normalize(),
+            'symbol': 'NSE:SBIN-EQ', 'trade_signal': True, 'close': 820,
+            'low': 800, strategy.ema_column: 790}])
+        strategy.prepare_data = Mock(return_value=candles)
+        provider = Mock()
+        provider.select_for_signal.return_value = {'put_symbol': 'PUT', 'put_entry_price': 12.5,
+            'put_prev_day_high': 18.0}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('src.components.strategy.PUT_TG_PCT', 'prev_day_high'):
+            output = Path(directory) / 'signals.csv'
+            strategy.save_signals_to_csv(candles, option_provider=provider, output_path=output)
+            row = pd.read_csv(output).iloc[0]
+            self.assertEqual(row['put_TG_price'], 18.0)
+
+    def test_previous_trading_day_high_skips_weekend_and_signal_day(self):
+        provider = self.provider()
+        del provider.get_daily_close
+        friday = int(pd.Timestamp('2026-10-23 15:30', tz='Asia/Kolkata').timestamp())
+        monday = int(pd.Timestamp('2026-10-26 15:30', tz='Asia/Kolkata').timestamp())
+        provider._request = Mock(return_value={'s': 'ok', 'candles': [
+            [friday, 10, 18, 9, 12, 100], [monday, 11, 30, 10, 20, 100]]})
+        self.assertEqual(provider.get_previous_day_high('PUT', date(2026, 10, 26)), 18.0)
+
+    def test_expired_put_previous_high_uses_historical_contract_candles(self):
+        provider = self.provider()
+        provider.get_contract_history.return_value = pd.DataFrame({
+            'timestamp': [pd.Timestamp('2026-08-21 15:25', tz='Asia/Kolkata')],
+            'high': [19.5]})
+        self.assertEqual(provider.get_previous_day_high('PUT', date(2026, 8, 24), expired=True), 19.5)
+
+    def test_previous_high_api_failure_keeps_target_unavailable(self):
+        provider = self.provider()
+        provider._request = Mock(side_effect=RuntimeError('API unavailable'))
+        self.assertIsNone(provider.get_previous_day_high('PUT', date(2026, 10, 26)))
+
+    def test_missing_put_entry_leaves_price_fields_blank(self):
+        strategy = HigherHighStrategy()
+        candles = pd.DataFrame([{'date': pd.Timestamp.now(tz='Asia/Kolkata').normalize(),
+            'symbol': 'NSE:SBIN-EQ', 'trade_signal': True, 'close': 820,
+            'low': 800, strategy.ema_column: 790}])
+        strategy.prepare_data = Mock(return_value=candles)
+        provider = Mock()
+        provider.select_for_signal.return_value = {'put_symbol': 'PUT', 'put_prev_day_high': 18}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('src.components.strategy.PUT_TG_PCT', 'prev_day_high'):
+            output = Path(directory) / 'signals.csv'
+            strategy.save_signals_to_csv(candles, option_provider=provider, output_path=output)
+            row = pd.read_csv(output).iloc[0]
+            self.assertTrue(pd.isna(row['put_SL_price']))
+            self.assertTrue(pd.isna(row['put_TG_price']))
 
     def test_only_current_month_and_year_trigger_put_retrieval(self):
         strategy = HigherHighStrategy()
